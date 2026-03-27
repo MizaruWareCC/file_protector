@@ -12,6 +12,8 @@
 #include <botan/cipher_mode.h>
 #include <botan/hex.h>
 
+import argument_parser;
+
 std::string random_key() {
     const int start_ascii = 33;
     const int end_ascii = 125;
@@ -47,14 +49,32 @@ bool exists_and_file(const std::filesystem::path& file) {
 
 int main(int argc, const char* argv[])
 {
-    if (argc < 4 && argc != 1) {
-        std::cout << "Invalid usage!\nExample usage:\n\t[file].[exe] (en | de)crypt file, [file2, file3, ...], key (auto can be used for encryption to generate key)\n";
-        return 1;
-    }
+    ArgParser args(argc, argv);
+    args.load_keyword_value("--action");
+    args.load_keyword_list("--files");
+    args.load_keyword_value("--key");
+    args.process();
 
     Action action = Action::Enc;
     std::vector<std::filesystem::path> paths;
     std::string key_t;
+
+    auto validate_key = [&](std::string& key) -> bool {
+        if (key == "auto" && action == Action::Enc) {
+            key = random_key();
+            std::cout << "Generated key: " << key << '\n';
+            return true;
+        }
+
+        if (key.size() != 32) {
+            std::cout << "Key size must be exactly 32 bytes for AES-256.\n";
+            std::cout << "Enter any key to continiue...";
+            auto _ = _getch();
+            return false;
+        }
+
+        return true;
+        };
 
     if (argc == 1) {
         std::cout << "Enter action(encrypt/decrypt): ";
@@ -89,34 +109,54 @@ int main(int argc, const char* argv[])
 
         std::cout << "Enter key: ";
         std::cin >> key_t;
-        if (key_t == "auto" && action == Action::Enc) {
-            key_t = random_key();
-            std::cout << "Generated key: " << key_t << '\n';
-        }
-        else if (key_t.size() != 32) {
-            std::cout << "Key size must be exactly 32 bytes for AES-256.\n";
-            std::cout << "Enter any key to continiue...";
-            auto _ = _getch();
+
+        if (!validate_key(key_t)) {
             return 1;
         }
     }
     else {
-        key_t = argv[argc - 1];
-        if (key_t == "auto" && action == Action::Enc) {
-            key_t = random_key();
-            std::cout << "Generated key: " << key_t << '\n';
+        try {
+            std::string action_t = args.get_value("--action");
+            std::string key_value;
+
+            if (!args.value_loaded("--key")) {
+                if (action == Action::Enc) key_value = "auto";
+                else {
+                    std::cout << "--key is required for decryption\n";
+                    return 1;
+                }
+            }
+            else {
+                key_value = args.get_value("--key");
+            }
+
+            std::vector<std::string> file_list = args.get_list("--files");
+
+            if (action_t.starts_with("d")) {
+                action = Action::Dec;
+            }
+            else if (!action_t.starts_with("e")) {
+                std::cout << "Unknown action: " << action_t << "\n";
+                std::cout << "Enter any key to continiue...";
+                auto _ = _getch();
+                return 1;
+            }
+
+            for (const std::string& f : file_list) {
+                paths.emplace_back(f);
+            }
+
+            key_t = std::move(key_value);
+
+            if (!validate_key(key_t)) {
+                return 1;
+            }
         }
-        else if (key_t.size() != 32) {
-            std::cout << "Key size must be exactly 32 bytes for AES-256.\n";
-            std::cout << "Enter any key to continiue...";
-            auto _ = _getch();
-            return 1;
-        }
-        if (argv[1][0] == 'd') {
-            action = Action::Dec;
-        }
-        else if (argv[1][0] != 'e') {
-            std::cout << "Unknown argument: " << argv[1] << "\n";
+        catch (const std::out_of_range&) {
+            std::cout << "Missing required arguments.\n";
+            std::cout << "Usage:\n";
+            std::cout << "  --action encrypt --files file1 file2 file3 [, --key \"key\"]\n";
+            std::cout << "  --action decrypt --files file1 file2 file3 --key \"key\"\n";
             std::cout << "Enter any key to continiue...";
             auto _ = _getch();
             return 1;
@@ -172,15 +212,6 @@ int main(int argc, const char* argv[])
     }
 
     std::filesystem::path base_folder = base_folder_t;
-
-    if (argc != 1) {
-        for (int i = 2; i < argc - 1; i++) {
-            std::filesystem::path p = argv[i];
-            if (std::filesystem::exists(p)) {
-                paths.emplace_back(p);
-            }
-        }
-    }
 
     int successful_operation_count = 0;
 
