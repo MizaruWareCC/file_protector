@@ -345,7 +345,6 @@ int main(int argc, const char* argv[])
 
 /*
 TODO:
-    Better command line argument handling
     Handle folders
     Fix elapsed time counting user to input when encountering collision with file and asking if it should be overwritten with Action::Ask set
 */
