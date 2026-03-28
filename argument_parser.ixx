@@ -76,7 +76,7 @@ public:
         return it->second;
     }
 
-    bool flag_loaded(const std::string& flag) const {
+    bool flag_set(const std::string& flag) const {
         return loaded_flags.contains(flag);
     }
 
