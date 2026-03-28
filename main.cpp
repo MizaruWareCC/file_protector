@@ -265,8 +265,8 @@ int main(int argc, const char* argv[])
         catch (const std::out_of_range&) {
             std::cout << "Missing required arguments.\n";
             std::cout << "Usage:\n";
-            std::cout << "  --action encrypt --files file1 file2 file3 [, --key \"key\"]\n";
-            std::cout << "  --action decrypt --files file1 file2 file3 --key \"key\"\n";
+            std::cout << "  --action encrypt --files file1 file2 file3 --folders folder1 \"folder2/subfolder\" [, --key \"key\", --recursive]\n";
+            std::cout << "  --action decrypt --files file1 file2 file3 --folders folder1 \"folder2/subfolder\" --key \"key\" [, --recursive]\n";
             std::cout << "Enter any key to continiue...";
             auto _ = _getch();
             return 1;
