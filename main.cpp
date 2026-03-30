@@ -42,7 +42,8 @@ bool exists_and_file(const std::filesystem::path& file) {
 }
 
 bool encrypt_file(const std::filesystem::path& input_file, const std::filesystem::path& output_file,
-    Botan::Cipher_Mode& cipher, Botan::AutoSeeded_RNG& rng) {
+                  Botan::Cipher_Mode& cipher, Botan::AutoSeeded_RNG& rng,
+                  double* time_spent_in_ms_cryptography, double* time_spent_in_ms_io) {
     std::ifstream in_stream(input_file, std::ios::binary);
     if (!in_stream.is_open()) {
         std::cout << "Failed opening file with path \"" << input_file.string() << "\"\n";
@@ -54,29 +55,43 @@ bool encrypt_file(const std::filesystem::path& input_file, const std::filesystem
 
     const auto nonce = rng.random_vec<std::vector<uint8_t>>(cipher.default_nonce_length());
 
+
     try {
+        auto start = std::chrono::steady_clock::now();
         cipher.start(nonce);
         cipher.finish(buffer);
+        if (time_spent_in_ms_cryptography != nullptr) {
+            auto end = std::chrono::steady_clock::now();
+            std::chrono::duration<double, std::milli> ms = end - start;
+            *time_spent_in_ms_cryptography += ms.count();
+        }
+
+        start = std::chrono::steady_clock::now();
+        std::ofstream out_stream(output_file, std::ios::binary);
+        if (!out_stream.is_open()) {
+            std::cout << "Failed opening file with path \"" << output_file.string() << "\"\n";
+            return false;
+        }
+
+        // [nonce][ciphertext+tag]
+        out_stream.write(reinterpret_cast<const char*>(nonce.data()), nonce.size());
+        out_stream.write(reinterpret_cast<const char*>(buffer.data()), buffer.size());
+        if (time_spent_in_ms_io != nullptr) {
+            auto end = std::chrono::steady_clock::now();
+            std::chrono::duration<double, std::milli> ms = end - start;
+            *time_spent_in_ms_io += ms.count();
+        }
+
+        return true;
     }
     catch (const std::exception& e) {
         std::cout << "Encryption failed for file \"" << input_file.string() << "\": " << e.what() << "\n";
         return false;
     }
-
-    std::ofstream out_stream(output_file, std::ios::binary);
-    if (!out_stream.is_open()) {
-        std::cout << "Failed opening file with path \"" << output_file.string() << "\"\n";
-        return false;
-    }
-
-    // [nonce][ciphertext+tag]
-    out_stream.write(reinterpret_cast<const char*>(nonce.data()), nonce.size());
-    out_stream.write(reinterpret_cast<const char*>(buffer.data()), buffer.size());
-
-    return true;
 }
 
-bool decrypt_file(const std::filesystem::path& input_file, const std::filesystem::path& output_file, Botan::Cipher_Mode& cipher) {
+bool decrypt_file(const std::filesystem::path& input_file, const std::filesystem::path& output_file,
+                  Botan::Cipher_Mode& cipher, double* time_spent_in_ms_cryptography, double* time_spent_in_ms_io) {
     std::ifstream in_stream(input_file, std::ios::binary);
     if (!in_stream.is_open()) {
         std::cout << "Failed opening file with path \"" << input_file.string() << "\"\n";
@@ -96,10 +111,17 @@ bool decrypt_file(const std::filesystem::path& input_file, const std::filesystem
         std::istreambuf_iterator<char>());
 
     try {
+        auto start = std::chrono::steady_clock::now();
         cipher.start(nonce);
         Botan::secure_vector<uint8_t> plaintext(buffer.begin(), buffer.end());
         cipher.finish(plaintext);
+        if (time_spent_in_ms_cryptography != nullptr) {
+            auto end = std::chrono::steady_clock::now();
+            std::chrono::duration<double, std::milli> ms = end - start;
+            *time_spent_in_ms_cryptography += ms.count();
+        }
 
+        start = std::chrono::steady_clock::now();
         std::ofstream out_stream(output_file, std::ios::binary);
         if (!out_stream.is_open()) {
             std::cout << "Failed opening file with path \"" << output_file.string() << "\"\n";
@@ -107,6 +129,11 @@ bool decrypt_file(const std::filesystem::path& input_file, const std::filesystem
         }
 
         out_stream.write(reinterpret_cast<const char*>(plaintext.data()), plaintext.size());
+        if (time_spent_in_ms_io != nullptr) {
+            auto end = std::chrono::steady_clock::now();
+            std::chrono::duration<double, std::milli> ms = end - start;
+            *time_spent_in_ms_io += ms.count();
+        }
         return true;
     }
     catch (const Botan::Invalid_Authentication_Tag&) {
@@ -129,6 +156,7 @@ enum Mode {
 
 int main(int argc, const char* argv[])
 {
+    auto start_time_program = std::chrono::steady_clock::now();
     ArgParser args(argc, argv);
     args.load_keyword_value("--action");
     args.load_keyword_list("--files");
@@ -326,7 +354,8 @@ int main(int argc, const char* argv[])
     int total_files_count = 0;
     int successful_operation_count = 0;
 
-    double elapsed_ms = 0;
+    double elapsed_ms_cryptography = 0;
+    double elapsed_ms_io = 0;
 
     Botan::AutoSeeded_RNG rng;
     auto enc_cipher = Botan::Cipher_Mode::create_or_throw("AES-256/GCM", Botan::Cipher_Dir::Encryption);
@@ -357,11 +386,10 @@ int main(int argc, const char* argv[])
         std::filesystem::path output_file = base_folder / input_file.filename();
 
         if (before_action(input_file, output_file)) {
-            auto start = std::chrono::steady_clock::now();
             if (action == Action::Dec) {
                 std::cout << "Decrypting file \"" << input_file.string() << "\"\n";
 
-                if (decrypt_file(input_file, output_file, *dec_cipher)) {
+                if (decrypt_file(input_file, output_file, *dec_cipher, &elapsed_ms_cryptography, &elapsed_ms_io)) {
                     ++successful_operation_count;
                     std::cout << "Ended decryption for current file successfully.\n";
                 }
@@ -369,14 +397,11 @@ int main(int argc, const char* argv[])
             else {
                 std::cout << "Encrypting file \"" << input_file.string() << "\"\n";
 
-                if (encrypt_file(input_file, output_file, *enc_cipher, rng)) {
+                if (encrypt_file(input_file, output_file, *enc_cipher, rng, &elapsed_ms_cryptography, &elapsed_ms_io)) {
                     ++successful_operation_count;
                     std::cout << "Ended encryption for current file successfully.\n";
                 }
             }
-            auto end = std::chrono::steady_clock::now();
-            std::chrono::duration<double, std::milli> ms = end - start;
-            elapsed_ms += ms.count();
         }            
     }
     if (args.flag_set("--recursive")) {
@@ -398,11 +423,10 @@ int main(int argc, const char* argv[])
                 std::filesystem::create_directories(output_file.parent_path());
 
                 if (before_action(input_file, output_file)) {
-                    auto start = std::chrono::steady_clock::now();
                     if (action == Action::Dec) {
                         std::cout << "Decrypting file \"" << input_file.string() << "\"\n";
 
-                        if (decrypt_file(input_file, output_file, *dec_cipher)) {
+                        if (decrypt_file(input_file, output_file, *dec_cipher, &elapsed_ms_cryptography, &elapsed_ms_io)) {
                             ++successful_operation_count;
                             std::cout << "Ended decryption for current file successfully.\n";
                         }
@@ -410,14 +434,11 @@ int main(int argc, const char* argv[])
                     else {
                         std::cout << "Encrypting file \"" << input_file.string() << "\"\n";
 
-                        if (encrypt_file(input_file, output_file, *enc_cipher, rng)) {
+                        if (encrypt_file(input_file, output_file, *enc_cipher, rng, &elapsed_ms_cryptography, &elapsed_ms_io)) {
                             ++successful_operation_count;
                             std::cout << "Ended encryption for current file successfully.\n";
                         }
                     }
-                    auto end = std::chrono::steady_clock::now();
-                    std::chrono::duration<double, std::milli> ms = end - start;
-                    elapsed_ms += ms.count();
                 }
             }
         }
@@ -440,11 +461,10 @@ int main(int argc, const char* argv[])
                 std::filesystem::create_directories(output_file.parent_path());
 
                 if (before_action(input_file, output_file)) {
-                    auto start = std::chrono::steady_clock::now();
                     if (action == Action::Dec) {
                         std::cout << "Decrypting file \"" << input_file.string() << "\"\n";
 
-                        if (decrypt_file(input_file, output_file, *dec_cipher)) {
+                        if (decrypt_file(input_file, output_file, *dec_cipher, &elapsed_ms_cryptography, &elapsed_ms_io)) {
                             ++successful_operation_count;
                             std::cout << "Ended decryption for current file successfully.\n";
                         }
@@ -452,14 +472,11 @@ int main(int argc, const char* argv[])
                     else {
                         std::cout << "Encrypting file \"" << input_file.string() << "\"\n";
 
-                        if (encrypt_file(input_file, output_file, *enc_cipher, rng)) {
+                        if (encrypt_file(input_file, output_file, *enc_cipher, rng, &elapsed_ms_cryptography, &elapsed_ms_io)) {
                             ++successful_operation_count;
                             std::cout << "Ended encryption for current file successfully.\n";
                         }
                     }
-                    auto end = std::chrono::steady_clock::now();
-                    std::chrono::duration<double, std::milli> ms = end - start;
-                    elapsed_ms += ms.count();
                 }
             }
         }
@@ -471,9 +488,14 @@ int main(int argc, const char* argv[])
     std::cout << "[Statistic for " << action_t << "]\n"
         << " Files " << action_t << ": " << successful_operation_count << " / " << total_files_count << " ("
         << (double)successful_operation_count * 100.0 / (double)total_files_count << "%)\n"
-        << " Time elapsed: " << elapsed_ms << " ms\n"
+        << " Time elapsed for crypotgraphy: " << elapsed_ms_cryptography << " ms\n"
+        << " Time elapsed for io: " << elapsed_ms_io << " ms (doesn't include folders actions)\n"
         << " Output folder: " << base_folder_t << '\n';
 
+    auto end_time_program = std::chrono::steady_clock::now();
+    std::chrono::duration<double, std::milli> elapsed_ms_program = end_time_program - start_time_program;
+
+    std::cout << "Program was running for " << elapsed_ms_program.count() << "ms (~" << elapsed_ms_program.count() / 1000.0 << "sec)\n";
     std::cout << "Enter any key to continiue...";
     auto _ = _getch();
 
