@@ -6,6 +6,25 @@ Or run it with command line:
 --action decrypt --files file1 file2 file3 --folders folder1 "folder2/subfolder" --key "key\" [, --recursive]
 ```
 
+## Argument parser
+This project uses custom parser, wich is minimal but doesn't support some features that you may expect it to.
+```
+--must_be_loaded_keyword ("any value" | value_without_space)
+--any_flag
+"--   flag   2" => can be used but not recomended, use alternatives when can for readability
+--loaded_list value1 "value 2" "as much values as you want" [, --end]
+```
+Parser has types:
+ - keyword with value
+ - keyword with list
+ - flag
+
+First 2 must be loaded by either program itself or [lua addons](#lua-addons) or it will be handled as flag or will assume all of it are flags:
+```
+file_protector.exe --my_unloaded_keyword value // will be handled as flags: [--my_unloaded_keyword, value]
+```
+Keyword with list may end with either `--end` wich is reserved or with starting of other argument that must start with `--` wich you could have already seen at [usage example](#usage)
+
 ## Lua addons
 Flag `--lua` will make program to use external lua addons. Basic addons, like logging are already implemented and can be found [here](https://github.com/MizaruWareCC/file_protector/tree/main/lua_addons)
 All addons must be located at `lua_addons` folder in the same directory as your executable.
