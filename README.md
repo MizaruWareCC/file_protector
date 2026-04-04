@@ -1,5 +1,3 @@
-Project uses c++23 as main language and Botan library as dependency for doing cryptographic actions.
-
 ## Usage
 You can either run executable and get input window that will ask you to fill data, such as: action, file count, files, key
 Or run it with command line:
@@ -35,3 +33,6 @@ lua_state.new_usertype<LuaPath>(
     "root_name", &LuaPath::root_name,
     ...
 ```
+
+## Dependencies
+Project uses [botan](https://github.com/randombit/botan) for cryptography and [Sol2](https://github.com/ThePhD/sol2) for lua embedding.
