@@ -455,28 +455,12 @@ int main(int argc, const char* argv[]) {
 
     auto lua_cli = lua_state.create_named_table("CLIArgs");
 
-    lua_cli.set_function("load_keyword_value",[&args](sol::this_state ts, const std::string& keyword) -> std::tuple<bool, sol::object> {
-        sol::state_view lua(ts);
-
-        try {
-            args.load_keyword_value(keyword);
-            return { true, sol::make_object(lua, sol::lua_nil) };
-        }
-        catch (const std::runtime_error& e) {
-            return { false, sol::make_object(lua, std::string(e.what())) };
-        }
+    lua_cli.set_function("load_keyword_value",[&args](const std::string& keyword) {
+        args.load_keyword_value(keyword);
         });
 
-    lua_cli.set_function("load_keyword_list", [&args](sol::this_state ts, const std::string& keyword) -> std::tuple<bool, sol::object> {
-        sol::state_view lua(ts);
-
-        try {
+    lua_cli.set_function("load_keyword_list", [&args](const std::string& keyword) {
             args.load_keyword_list(keyword);
-            return { true, sol::make_object(lua, sol::lua_nil) };
-        }
-        catch (const std::runtime_error& e) {
-            return { false, sol::make_object(lua, std::string(e.what())) };
-        }
         });
 
     args.load_keyword_value("--action");
