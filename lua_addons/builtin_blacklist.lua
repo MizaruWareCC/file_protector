@@ -21,7 +21,7 @@ if CLIArgs.flag_set("--blacklist") then
     blacklisted_regex = tmp
     tmp = nil
 
-    if #blacklisted_exts ~= 0 and blacklisted_files ~= 0 and blacklisted_folders ~= 0 and blacklisted_regex ~= 0 then -- dont register event if there is no filters
+    if #blacklisted_exts ~= 0 and blacklisted_files ~= 0 and blacklisted_regex ~= 0 then -- dont register event if there is no filters
         local event_manager = EventManager.new()
 
         function event_manager:on_preprocess(action, in_file_path, out_file_path)
