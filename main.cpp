@@ -338,6 +338,114 @@ private:
     ArgParser& parser;
 };
 
+class LuaCrypt {
+public:
+    LuaCrypt(Action action) : action(action) {
+        if (action == Enc)
+            cipher = Botan::Cipher_Mode::create_or_throw("AES-256/GCM", Botan::Cipher_Dir::Encryption);
+        else
+            cipher = Botan::Cipher_Mode::create_or_throw("AES-256/GCM", Botan::Cipher_Dir::Decryption);
+    }
+
+    std::tuple<sol::object, sol::object> set_key(sol::this_state ts, std::string key) {
+        sol::state_view lua = ts;
+        if (key.size() == 32) {
+            Botan::secure_vector<uint8_t> key_bytes(key.begin(), key.end());
+            cipher->set_key(key_bytes);
+            key_set = true;
+            return std::tuple(sol::make_object(lua, true), sol::make_object(lua, key));
+        }
+        else if (key == "auto" && action == Enc) {
+            this->key = random_key();
+            Botan::secure_vector<uint8_t> key_bytes(this->key.begin(), this->key.end());
+            cipher->set_key(key_bytes);
+            key_set = true;
+            return std::tuple(sol::make_object(lua, true), sol::make_object(lua, this->key));
+        }
+
+        return std::tuple(sol::make_object(lua, false), sol::make_object(lua, "invalid key"));
+    }
+
+    std::tuple<sol::object, sol::object> process(sol::this_state ts, std::string input) {
+        sol::state_view lua = ts;
+
+        if (!key_set) {
+            return std::tuple(
+                sol::make_object(lua, false),
+                sol::make_object(lua, "no key")
+            );
+        }
+
+        Botan::secure_vector<uint8_t> input_bytes(input.begin(), input.end());
+
+        if (action == Enc) {
+            const auto nonce = rng.random_vec<std::vector<uint8_t>>(cipher->default_nonce_length());
+
+            try {
+                cipher->start(nonce);
+                cipher->finish(input_bytes);
+
+                std::string out;
+                out.reserve(nonce.size() + input_bytes.size());
+                out.append(reinterpret_cast<const char*>(nonce.data()), nonce.size());
+                out.append(reinterpret_cast<const char*>(input_bytes.data()), input_bytes.size());
+
+                return std::tuple(
+                    sol::make_object(lua, out),
+                    sol::make_object(lua, sol::lua_nil)
+                );
+            }
+            catch (const std::exception& e) {
+                return std::tuple(
+                    sol::make_object(lua, sol::lua_nil),
+                    sol::make_object(lua, std::string(e.what()))
+                );
+            }
+        }
+        else {
+            const size_t nonce_len = cipher->default_nonce_length();
+
+            if (input_bytes.size() < nonce_len) {
+                return std::tuple(
+                    sol::make_object(lua, sol::lua_nil),
+                    sol::make_object(lua, "invalid nonce")
+                );
+            }
+
+            try {
+                std::vector<uint8_t> nonce(input_bytes.begin(), input_bytes.begin() + nonce_len);
+                Botan::secure_vector<uint8_t> payload(input_bytes.begin() + nonce_len, input_bytes.end());
+
+                cipher->start(nonce);
+                cipher->finish(payload);
+
+                std::string out(reinterpret_cast<const char*>(payload.data()), payload.size());
+
+                return std::tuple(
+                    sol::make_object(lua, out),
+                    sol::make_object(lua, sol::lua_nil)
+                );
+            }
+            catch (const std::exception& e) {
+                return std::tuple(
+                    sol::make_object(lua, sol::lua_nil),
+                    sol::make_object(lua, std::string(e.what()))
+                );
+            }
+        }
+    }
+
+    std::string get_key() const {
+        return key;
+    }
+private:
+    bool key_set;
+    Action action;
+    std::unique_ptr<Botan::Cipher_Mode> cipher;
+    Botan::AutoSeeded_RNG rng;
+    std::string key;
+};
+
 void load_luas(sol::state& state, std::filesystem::path from) {
     for (auto entry : std::filesystem::directory_iterator(from)) {
         std::filesystem::path p = entry.path();
@@ -394,6 +502,13 @@ int main(int argc, const char* argv[]) {
         "is_file", &LuaPath::is_file,
         "string", &LuaPath::string,
         sol::meta_function::to_string, &LuaPath::string
+    );
+
+    lua_state.new_usertype<LuaCrypt>(
+        "LuaCrypt", sol::constructors<LuaCrypt(Action action)>(),
+        "set_key", &LuaCrypt::set_key,
+        "process", &LuaCrypt::process,
+        "get_key", &LuaCrypt::get_key
     );
 
     lua_state.new_usertype<EventManager>(
@@ -722,7 +837,7 @@ int main(int argc, const char* argv[]) {
             if (use_lua) {
                 for (auto mngr : lua_event_managers) {
                     if (!mngr->trigger_preprocess(action, file, out_file)) {
-                        std::cout << "Ignoring file \"" << file << "\" because lua prohibited it\n";
+                        std::cout << "Ignoring file " << file << " because lua prohibited it\n";
                         return false;
                     }
                 }
