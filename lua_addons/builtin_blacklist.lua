@@ -46,7 +46,6 @@ if CLIArgs.flag_set("--blacklist") then
             return true
         end
 
-        RegisterEventManager(event_manager)
         print("Blacklist is initialized")
     end
 end

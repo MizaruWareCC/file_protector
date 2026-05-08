@@ -255,69 +255,26 @@ private:
     std::filesystem::path path;
 };
 
-/*
-    All lua callbacks:
-     void on_action
-        event.type := Action
-        event.status := Enums.Status
-        event.file_path := LuaPath
-        event.out_file := LuaPath
-
-    bool on_preprocess -> false => stop processing
-        event.type := Action
-        event.file_path := LuaPath
-        event.out_file := LuaPath
-
-     void before_exit
-        event.time_elapsed := double
-        event.time_elapsed_io := double
-        event.time_elapsed_cryptography := double
-*/
-
 class EventManager {
 public:
-    EventManager(sol::this_state ts):
-        after_action(sol::make_reference<sol::function>(ts.lua_state(), &EventManager::default_void)),
-        on_preprocess(sol::make_reference<sol::function>(ts.lua_state(), &EventManager::default_true)),
-        before_exit(sol::make_reference<sol::function>(ts.lua_state(), &EventManager::default_void)) { }
+    using after_action_t = std::function<void(EventManager&, Action, Status, const LuaPath&, const LuaPath&)>;
+    using preprocess_t = std::function<bool(EventManager&, Action, const LuaPath&, const LuaPath&)>;
+    using before_exit_t = std::function<void(EventManager&, double, double, double)>;
 
-    sol::function after_action;
-    sol::function on_preprocess;
-    sol::function before_exit;
+    after_action_t after_action = [](EventManager&, Action, Status, const LuaPath&, const LuaPath&) {};
+    preprocess_t on_preprocess = [](EventManager&, Action, const LuaPath&, const LuaPath&) { return true; };
+    before_exit_t before_exit = [](EventManager&, double, double, double) {};
 
     void trigger_action(Action action, Status status, const LuaPath& file_path, const LuaPath& out_path) {
-        sol::protected_function cb = after_action;
-        auto result = cb(*this, action, status, file_path, out_path);
-        if (!result.valid()) {
-            sol::error err = result;
-            std::cerr << err.what() << '\n';
-        }
+        after_action(*this, action, status, file_path, out_path);
     }
 
     bool trigger_preprocess(Action action, const LuaPath& file_path, const LuaPath& out_path) {
-        sol::protected_function cb = on_preprocess;
-        auto result = cb(*this, action, file_path, out_path);
-        if (!result.valid()) {
-            sol::error err = result;
-            std::cerr << err.what() << '\n';
-            return true;
-        }
-        return result.get<bool>();
+        return on_preprocess(*this, action, file_path, out_path);
     }
 
-    void trigger_exit(double time_elapsed, double time_elapsed_io, double time_elapsed_cryprography) {
-        sol::protected_function cb = before_exit;
-        auto result = cb(*this, time_elapsed, time_elapsed_io, time_elapsed_cryprography);
-        if (!result.valid()) {
-            sol::error err = result;
-            std::cerr << err.what() << '\n';
-        }
-    }
-
-private:
-    static void default_void() {};
-    static bool default_true() {
-        return true;
+    void trigger_exit(double time_elapsed, double time_elapsed_io, double time_elapsed_cryptography) {
+        before_exit(*this, time_elapsed, time_elapsed_io, time_elapsed_cryptography);
     }
 };
 
@@ -511,19 +468,38 @@ int main(int argc, const char* argv[]) {
         "get_key", &LuaCrypt::get_key
     );
 
+    std::vector<std::unique_ptr<EventManager>> lua_event_managers;
+
     lua_state.new_usertype<EventManager>(
         "EventManager",
-        sol::constructors<EventManager(sol::this_state)>(),
+        "new", sol::factories([&lua_event_managers]() {
+            auto ptr = std::make_unique<EventManager>(EventManager());
+            lua_event_managers.push_back(std::move(ptr));
+            return lua_event_managers.back().get();
+            }),
         "after_action", &EventManager::after_action,
         "on_preprocess", &EventManager::on_preprocess,
         "before_exit", &EventManager::before_exit
     );
 
-    std::vector<EventManager*> lua_event_managers{};
+    /*
+        All lua callbacks:
+         void on_action
+            event.type := Action
+            event.status := Enums.Status
+            event.file_path := LuaPath
+            event.out_file := LuaPath
 
-    lua_state.set_function("RegisterEventManager", [&lua_event_managers](EventManager& manager) {
-        lua_event_managers.push_back(&manager);
-        });
+        bool on_preprocess -> false => stop processing
+            event.type := Action
+            event.file_path := LuaPath
+            event.out_file := LuaPath
+
+         void before_exit
+            event.time_elapsed := double
+            event.time_elapsed_io := double
+            event.time_elapsed_cryptography := double
+    */
 
     auto lua_fs = lua_state.create_named_table("FileSystem");
 
@@ -835,7 +811,7 @@ int main(int argc, const char* argv[]) {
 
     auto before_action = [&](std::filesystem::path file, std::filesystem::path out_file) {
             if (use_lua) {
-                for (auto mngr : lua_event_managers) {
+                for (auto& mngr : lua_event_managers) {
                     if (!mngr->trigger_preprocess(action, file, out_file)) {
                         std::cout << "Ignoring file " << file << " because lua prohibited it\n";
                         return false;
@@ -869,14 +845,14 @@ int main(int argc, const char* argv[]) {
                 if (decrypt_file(input_file, output_file, *dec_cipher, &elapsed_ms_cryptography, &elapsed_ms_io)) {
                     ++successful_operation_count;
                     if (use_lua) {
-                        for (auto mngr : lua_event_managers) {
+                        for (auto& mngr : lua_event_managers) {
                             mngr->trigger_action(action, Status::Success, input_file, output_file);
                         }
                     }
                     std::cout << "Ended decryption for current file successfully.\n";
                 }
                 else if (use_lua) {
-                    for (auto mngr : lua_event_managers) {
+                    for (auto& mngr : lua_event_managers) {
                         mngr->trigger_action(action, Status::Failure, input_file, output_file);
                     }
                 }
@@ -887,14 +863,14 @@ int main(int argc, const char* argv[]) {
                 if (encrypt_file(input_file, output_file, *enc_cipher, rng, &elapsed_ms_cryptography, &elapsed_ms_io)) {
                     ++successful_operation_count;
                     if (use_lua) {
-                        for (auto mngr : lua_event_managers) {
+                        for (auto& mngr : lua_event_managers) {
                             mngr->trigger_action(action, Status::Success, input_file, output_file);
                         }
                     }
                     std::cout << "Ended encryption for current file successfully.\n";
                 }
                 else if (use_lua) {
-                    for (auto mngr : lua_event_managers) {
+                    for (auto& mngr : lua_event_managers) {
                         mngr->trigger_action(action, Status::Failure, input_file, output_file);
                     }
                 }
@@ -926,14 +902,14 @@ int main(int argc, const char* argv[]) {
                         if (decrypt_file(input_file, output_file, *dec_cipher, &elapsed_ms_cryptography, &elapsed_ms_io)) {
                             ++successful_operation_count;
                             if (use_lua) {
-                                for (auto mngr : lua_event_managers) {
+                                for (auto& mngr : lua_event_managers) {
                                     mngr->trigger_action(action, Status::Success, input_file, output_file);
                                 }
                             }
                             std::cout << "Ended decryption for current file successfully.\n";
                         }
                         else if (use_lua) {
-                            for (auto mngr : lua_event_managers) {
+                            for (auto& mngr : lua_event_managers) {
                                 mngr->trigger_action(action, Status::Failure, input_file, output_file);
                             }
                         }
@@ -944,14 +920,14 @@ int main(int argc, const char* argv[]) {
                         if (encrypt_file(input_file, output_file, *enc_cipher, rng, &elapsed_ms_cryptography, &elapsed_ms_io)) {
                             ++successful_operation_count;
                             if (use_lua) {
-                                for (auto mngr : lua_event_managers) {
+                                for (auto& mngr : lua_event_managers) {
                                     mngr->trigger_action(action, Status::Success, input_file, output_file);
                                 }
                             }
                             std::cout << "Ended encryption for current file successfully.\n";
                         }
                         else if (use_lua) {
-                            for (auto mngr : lua_event_managers) {
+                            for (auto& mngr : lua_event_managers) {
                                 mngr->trigger_action(action, Status::Failure, input_file, output_file);
                             }
                         }
@@ -1014,7 +990,7 @@ int main(int argc, const char* argv[]) {
 
     std::cout << "Program was running for " << elapsed_ms_program.count() << "ms (~" << elapsed_ms_program.count() / 1000.0 << "sec)\n";
     if (use_lua) {
-        for (auto mngr : lua_event_managers) {
+        for (auto& mngr : lua_event_managers) {
             mngr->trigger_exit(elapsed_ms_program.count(), elapsed_ms_io, elapsed_ms_cryptography);
         }
     }

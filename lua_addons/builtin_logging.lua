@@ -7,13 +7,12 @@ if CLIArgs.flag_set("--logging") then
     local output_file = CLIArgs.get_value("--logging_file") or "file_protector.log"
     print("Loaded output file: " .. output_file)
 
-    print("Loaded action settings")
-
     local log_file, err = io.open(output_file, "w")
 
     if log_file then
-        print("Opened file")
         local event_manager = EventManager.new()
+        print(event_manager)
+        print(type(event_manager))
 
         function event_manager:on_preprocess(action, in_file_path, out_file_path)
             log_file:write(
@@ -37,7 +36,6 @@ if CLIArgs.flag_set("--logging") then
             log_file:close()
         end
 
-        RegisterEventManager(event_manager)
         print("Logger is initalized")
     else
         print("Couldn't open log file. Error " .. tostring(err))
